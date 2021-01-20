@@ -3,6 +3,8 @@ import Header from './Header';
 import Wallet from './Wallet';
 import NewOrder from './NewOrder';
 import AllOrders from './AllOrders';
+import MyOrders from './MyOrders';
+import AllTrades from './AllTrades';
 
 const SIDE = {
   BUY: 0,
@@ -23,6 +25,8 @@ function App({ web3, accounts, contracts }) {
     buy: [],
     sell: []
   });
+  const [trades, setTrades] = useState([]);
+  const [listener, setListener] = useState(undefined);
   
   const getBalances = async (account, token) => {
     const tokenDex = await contracts.dex.methods
@@ -34,15 +38,31 @@ function App({ web3, accounts, contracts }) {
     return { tokenDex, tokenWallet };
   }
 
-   const getOrders = async token => {
-     const orders = await Promise.all([
+  const getOrders = async token => {
+    const orders = await Promise.all([
+    contracts.dex.methods
+      .getOrders(web3.utils.fromAscii(token.ticker), SIDE.BUY).call(),
       contracts.dex.methods
-        .getOrders(web3.utils.fromAscii(token.ticker), SIDE.BUY).call(),
-        contracts.dex.methods
-          .getOrders(web3.utils.fromAscii(token.ticker), SIDE.SELL).call()
-     ]);
-     return { buy: orders[0], sell: orders[1] };
-   }
+        .getOrders(web3.utils.fromAscii(token.ticker), SIDE.SELL).call()
+    ]);
+    return { buy: orders[0], sell: orders[1] };
+  }
+
+  const listenToTrades = token => {
+    const tradeIds = new Set();
+    setTrades([]);
+    const listener = contracts.dex.events.NewTrade(
+      {
+        filter: { ticker: web3.utils.fromAscii(token && token.ticker)},
+        fromBlock: 0
+      })
+      .on('data', newTrade => {
+        if(tradeIds.has(newTrade.returnValues.tradeId)) return;
+        tradeIds.add(newTrade.returnValues.tradeId);
+        setTrades(trades => ([...trades, newTrade.returnValues]));
+      });
+      setListener(listener);
+  }
 
   const selectToken = token => {
     setUser({ ...user, selectedToken: token });
@@ -111,6 +131,7 @@ function App({ web3, accounts, contracts }) {
         getBalances(accounts[0], tokens[0]),
         getOrders(tokens[0])
       ]);
+      listenToTrades(tokens[0]);
       setTokens(tokens);
       setUser({ accounts, balances, selectedToken: tokens[0] });
       setOrders(orders);
@@ -127,10 +148,13 @@ function App({ web3, accounts, contracts }) {
       setUser(user => ({ ...user, balances }));
       setOrders(orders);
     }
+    listenToTrades(user.selectedToken);
     if (typeof user.selectedToken !== 'undefined') {
       init();
     }
-  }, [user.selectedToken]);
+  }, [user.selectedToken], () => {
+    listener.unsubscribe();
+  });
 
   if(typeof user.selectedToken === 'undefined') {
     return <div>Loading...</div>;
@@ -164,8 +188,21 @@ function App({ web3, accounts, contracts }) {
           {
             user.selectedToken.ticker !== 'DAI' && (
               <div className="col-sm-8">
+                <AllTrades
+                  trades={trades}
+                />
                 <AllOrders
                   orders={orders}
+                />
+                <MyOrders
+                  orders={{
+                    buy: orders.buy.filter(
+                      order => order.trader.toLowerCase() === user.accounts[0].toLowerCase()
+                    ),
+                    sell: orders.sell.filter(
+                      order => order.trader.toLowerCase() === user.accounts[0].toLowerCase()
+                    ),
+                  }}
                 />
               </div>
             )
